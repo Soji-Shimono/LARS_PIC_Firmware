@@ -3,7 +3,7 @@
     <type>com.microchip.mplab.nbide.embedded.makeproject</type>
     <configuration>
         <data xmlns="http://www.netbeans.org/ns/make-project/1">
-            <name>Motor_Pressure_Controll</name>
+            <name>LARS_PIC_Firmware</name>
             <creation-uuid>62c4fa3d-3ebe-48a4-9a7b-37923e03e08d</creation-uuid>
             <make-project-type>0</make-project-type>
             <c-extensions>c</c-extensions>
