@@ -1,4 +1,27 @@
 /*------------------------------------
+ * Pin configuration
+ * RA0: MotorCurrent
+ * 
+ * RB0: Encoder A
+ * RB1: Encoder B
+ * RB2: CANTX
+ * RB3: CANRX
+ *  
+ * RC5: MotorDriver EN
+ * RC6: pwm3, MotorDriver PWM1
+ * RC7: pwm4, MotorDriver PWM2
+ * 
+ * CAN message
+ * Receive
+ * 0x70 5byte set target 0: mode-direct, speed, torque, free. 1-4: singed int target value- pwm duty, velosity, torque 
+ * 0x71 4byte set torque-current coeff 0-3: float
+ * 
+ * Send
+ * 0x78 1byte Heart beat
+ * 0x79 set tension roller command  0: mode-direct, speed, torque, free. 1-4: singed int target value- pwm duty, velosity, torque
+ * 0x7a 8byte motor state 0-3: float velosity, 4-7: float torque
+ *   
+ * 
 //------------------------------------*/
 
 #include <p18lf25k80.h>
@@ -12,88 +35,107 @@
 //#include "thDrive.h"
 #include "delays.h"
 #include "INA226.h"
+#include "pwm.h"
 
 #pragma config FOSC = HS2	
 #pragma config PLLCFG = ON	//PLL40MHz
 #pragma config XINST = OFF
 #pragma config CANMX = PORTB
 #pragma config SOSCSEL = DIG
-//#pragma config WDT = OFF
+#pragma config WDTEN = ON
 //#pragma config LVP = OFF
 
 #define TMR0IF INTCONbits.TMR0IF
-#define LED PORTCbits.RC0
+#define RBIF INTCONbits.RBIF
+#define ENC_A PORTBbits.RB4
+#define ENC_B PORTBbits.RB5
+#define EN PORTCbits.RC5
+#define PWM1 PORTCbits.RC6
+#define PWM2 PORTCbits.RC7
 #define MCHP_C18
 #define NODE1
-#define D1_256 0x40
-#define D1_512 0x42
-#define D1_1024 0x44
-#define D1_2048 0x46
-#define D2_256 0x50
-#define D2_512 0x52
-#define D2_1024 0x54
-#define D2_2048 0x56
+
 //Functions prototype===============================================================
 void isr(void);
 void my_putc(unsigned char a,unsigned char port);
-char writeESCtest(char adress, int value);
-int readESCtest(char adress);
-void resetMS5837(void);
-unsigned int readCalcCoeff(char memadr);
-unsigned short long readMs5837ADC(char adcconf);
 void init(void);
-unsigned int getADC(void);
-void calcValues(unsigned short long D1,unsigned short long D2);
-signed int getIna226(unsigned char adr_);
-void setIna226pointer(unsigned char adr_, unsigned char pointer_);
-void setIna226Value(unsigned char adr_,unsigned char pointer_,unsigned int data);
-//????===================================================================
+int getADC(void);
+void motorupdate(int duty);
+void motorfree(void);
+void controllupdate(char mode, int power, float target_speed, float target_torque);
+void setMotorDuty(int pwm);
+float setMotorVelosity(float targetSpeed, float currentSpeed);
+void Int2Bytes(int input, BYTE* target, BYTE len);
+//===================================================================
+
 BOOL TimerFlag = FALSE;
 BOOL LEDFlag = TRUE;
 BOOL DEADTIMEFLAG = TRUE;
 int T_Counter = 0;
 int LED_Counter = 0;
 unsigned int TimeOut_Counter = 0;
+unsigned int led_TimeOut_Counter = 0;
 BYTE test = 0;
 //CAN??
-unsigned int idR_TH1  = 16;
-unsigned int idR_TH2 = 17;
-const unsigned long idT_TH1 = 18;
-const unsigned long idT_TH2 = 19;
-const unsigned long idT_PRES = 20;
-const unsigned long idT_TEMP = 21;
-const unsigned long idT_BATTINFO = 22;
+const unsigned long ID_SET_TENSION_ROLLER_COMMAND = 0x80;
+const unsigned long ID_STATUS = 0x79;
 
-const unsigned int TH_TIMEOUT = 1220;
-
-int thCmd[6]= {0x00,0x00,0x00,0x00,0x00,0x00};
-int _thCmd[6]= {0x00,0x00,0x00,0x00,0x00,0x00};
-BOOL deadtimeflg[6] = {FALSE,FALSE,FALSE,FALSE,FALSE,FALSE};
-BOOL _deadtimeflg[6] = {FALSE,FALSE,FALSE,FALSE,FALSE,FALSE};
-int thCmTest = 0;
-char thAdr[6] = {0x50,0x51,0x52,0x53,0x54,0x55};
-//char thAdr[6] = {0x29,0x2a,0x2b,0x2c,0x2d,0x2e};
-char testid = 0;
-int thSpd[6];
-int i = 0;
-//MS5837
-char promAdr[7] = {0xA0,0xA2,0xA4,0xA6,0xA8,0xAA,0xAC}; 
-unsigned int promCoeff[8]; 
-signed long dT;
-signed long temp;
-signed long off;
-signed long sens;
-signed long pressure;
-BYTE tstMessage[4] = {0xde,0xad,0xbe,0xaf};
-signed int battVoltage = 0;
-signed int battCurrent = 0;
-unsigned short long data1 = 0;
-unsigned short long data2 = 0;
+const unsigned int TIMEOUT = 4;
 
 int cnt=0;
-unsigned int n_prom7 = 0;
-unsigned int n_rem = 0;
-unsigned char n_bit=0;
+
+long speedCounter = 0;
+//float  speed = 0;
+float  torque = 0;
+float  target_speed = 0;
+float  target_torque = 0;
+int pwm_duty = 0;
+float reso = 4;
+float intCycle = 20;
+float torque2current = 1.0;
+const float VOLTAGE2CURRENT = 2.0;
+float reelRadius = 0.12;//[m]]
+float reelRadius_ = 0.07;//[m]]
+float rollerRadius = 0.015;//[m]]
+char control_mode = 0;
+float _speed = 0;
+
+union IntAndFloat{
+    long ival;
+    float fval;
+};
+union IntAndFloat speed;
+union IntAndFloat targetspeed;
+union IntAndFloat targetspeed_tension;
+union IntAndFloat current;
+
+
+
+typedef struct {
+    unsigned long ID;
+    BYTE data[8];
+    unsigned int len;
+} CANmessage;
+
+CANmessage set_tension;
+CANmessage send_Status;
+
+typedef struct {
+    float error;
+    float k;
+    float I;
+    float D;
+    float accum;
+    float dt;
+} controller;
+
+controller speedController;
+
+long sc = 0;
+int PWM_power = 0;
+
+int lastDuty = 0;
+int dir = 1;
 //????????==============================================================
 #pragma code compatible_vvector=0x08
 void compatible_interrupt(void){
@@ -110,210 +152,163 @@ void isr(void){
 		TMR0IF = 0;
 		T_Counter++;
         LED_Counter++;
-		TimeOut_Counter++;
 		if(T_Counter >= 61){//20Hz
 			T_Counter = 0;
 			TimerFlag = TRUE;
+            _speed = speedCounter / reso * intCycle * 2 * 3.14 / 51;//[rad/sec]
+            sc = speedCounter;
+            speedCounter = 0;
+            
+            TimeOut_Counter++;
 		}
         if(LED_Counter >= 610){//2Hz
 			LED_Counter = 0;
 			LEDFlag = TRUE;
-            //DEADTIMEFLAG = TRUE;
 		}
-        DEADTIMEFLAG = TRUE;
 	}
+    if(RBIF){
+        RBIF = 0;
+        if(ENC_A){
+            speedCounter +=1;
+        } 
+    }
 }
 //?????=========================================================================
 void main()
 {	
+    speed.fval = 0.0;
+    speedController.k = 15;
+    speedController.I = 18;
+    speedController.dt = 1.0 / intCycle;
+    speedController.accum = 0;
+    targetspeed.fval = 0;
+    
+    set_tension.ID = ID_SET_TENSION_ROLLER_COMMAND;
+    set_tension.len = 5;
+    send_Status.ID = ID_STATUS;
+    send_Status.len = 8;
+    
     init();
-    //InitializeESC
-    for(i = 0; i < 6; i++){
-        writeESCtest(thAdr[i],0x00);
-    }
-    //InitializeMS5837
-    
-    resetMS5837();
-    Delay1KTCYx(100);
-    for(i=0; i<7;i++){
-        promCoeff[i] = readCalcCoeff(promAdr[i]);
-        data_T[0] = ((promCoeff[i] >> 8) & 0x00ff);
-        data_T[1] = (promCoeff[i] & 0x00ff);
-        while(!ECANSendMessage(idT_TEMP, data_T,2, ECAN_TX_STD_FRAME));
-    }
-    
-    setIna226Value(0x40,0x05,0x0a00);
-    //int cnt;
-    promCoeff[0] = promCoeff[0] & 0x0fff;
-    //unsigned int n_prom7 = 0;
-    //unsigned int n_rem = 0;
-    //unsigned char n_bit;
-    for(i = 0; i < 8; i++){
-        promCoeff[7] = 0;
-        n_rem = 0;
-        n_bit = 0;
-        for (cnt =0; cnt < 16; cnt++){
-            if(cnt%2==1){
-                n_rem ^= (promCoeff[cnt>>1] & 0x00ff);            
-            }else{
-                n_rem ^= (promCoeff[cnt>>1] >>8);
-            }
-            for(n_bit = 8;n_bit > 0; n_bit--){
-                if(n_rem & 0x8000){
-                    n_rem = (n_rem << 1)^0x3000;
-                }else{
-                    n_rem = (n_rem <<1);
-                }
-            }
-        }
-        n_rem = (n_rem >> 12) & 0x000F;
-        data_T[0] = n_rem^0x00;
-        while(!ECANSendMessage(0xe0, data_T,1, ECAN_TX_STD_FRAME));
-    }
-	while(1){		
+	
+    while(1){		
 		if(ECANReceiveMessage(&id, data_R, &datalen_R, &flags)){
             //while(!ECANSendMessage(id, data_T,2, ECAN_TX_STD_FRAME));
 			switch(id){
-                case 0x74:
-                    while(!ECANSendMessage(0xff, tstMessage,4, ECAN_TX_STD_FRAME));
-                    for(i = 0; i < 4; i++){
-                        thCmd[i] = data_R[i*2];
-                        thCmd[i] = (thCmd[i] <<8 )|data_R[i*2+1];
-                        
-                        if( 
-                            (
-                                ( ((_thCmd[i] & 0x8000)  != ( thCmd[i] & 0x8000) ) && (_thCmd[i] !=0) && (thCmd[i] !=0)) ||
-                                ( (_thCmd[i] == 0) && (thCmd[i] != 0) ) 
-                            ) && !deadtimeflg[i]
-                        ){
-                            deadtimeflg[i] = TRUE;
-                        }
-                        _thCmd[i] = thCmd[i];
-                        
-                        if(deadtimeflg[i]){
-                            thCmd[i] = 0;
-                        }
-                        //_thCmd[i] = thCmd[i];
-                    }    
+                case 0x70:
                     TimeOut_Counter = 0;
-                    
-                    for(i = 0; i < 4; i++){
-                        writeESCtest(thAdr[i],thCmd[i]);
+                    switch(data_R[0]){
+                        case 0://direct
+                            control_mode = 0;
+                            pwm_duty = ((data_R[1] << 8 ) | data_R[2]);
+                            break;
+                        case 1://speed controll
+                            control_mode = 1;
+                            targetspeed.ival = data_R[1];
+                            targetspeed.ival = targetspeed.ival << 8 | data_R[2];
+                            targetspeed.ival = targetspeed.ival << 8 | data_R[3];
+                            targetspeed.ival = targetspeed.ival << 8 | data_R[4];
+                            //tension roller command sending
+                            if(targetspeed.fval > 0){
+                                targetspeed_tension.fval = targetspeed.fval * reelRadius / rollerRadius;
+                            }else{
+                                targetspeed_tension.fval = targetspeed.fval * reelRadius_ / rollerRadius;
+                            }
+                            
+                            //targetspeed_tension.fval = targetspeed.fval * reelRadius / rollerRadius;
+                            //Int2Bytes(targetspeed_tension.ival, set_tension.data, set_tension.len);
+                            set_tension.data[0] = 1;
+                            set_tension.data[1] = (targetspeed_tension.ival >> 24) & 0xff;
+                            set_tension.data[2] = (targetspeed_tension.ival >> 16) & 0xff;
+                            set_tension.data[3] = (targetspeed_tension.ival >> 8) & 0xff;
+                            set_tension.data[4] = (targetspeed_tension.ival) & 0xff;
+                            
+                            while(!ECANSendMessage(set_tension.ID, set_tension.data, set_tension.len, ECAN_TX_STD_FRAME));
+                            
+                            break;
+                        case 2:
+                            control_mode = 2;
+                            target_torque = ((data_R[1] << 24 ) | (data_R[2] << 16) | (data_R[3] << 8) | data_R[4] );
+                            break;
+                        default:
+                            break;
                     }
-                    
-                    break;
-                case 0x75:
-                    while(!ECANSendMessage(0xff, tstMessage,4, ECAN_TX_STD_FRAME));
-                    for(i = 0; i < 2; i++){
-                        thCmd[i+4] = data_R[i*2];
-                        thCmd[i+4] = (thCmd[i+4] <<8 )|data_R[i*2+1];
-                        if( 
-                            (
-                                ( ((_thCmd[i+4] & 0x8000)  != ( thCmd[i+4] & 0x8000) ) && (_thCmd[i+4] !=0) && (thCmd[i+4] !=0)) ||
-                                ( (_thCmd[i+4] == 0) && (thCmd[i+4] != 0) ) 
-                            )&& !deadtimeflg[i+4]
-                        ){
-                            deadtimeflg[i+4] = TRUE;
-                        }
-                        _thCmd[i+4] = thCmd[i+4];
-                        
-                        if(deadtimeflg[i+4]){
-                            thCmd[i+4] = 0;
-                        }
-                        //_thCmd[i+4] = thCmd[i+4];
-                    }
-                    TimeOut_Counter = 0;
-                    
-                    for(i = 0; i < 2; i++){
-                        writeESCtest(thAdr[i+4],thCmd[i+4]);
-                    }
-                    
+                break;
+                case 0x71:
+                    torque2current = ((data_R[0] << 24 ) | (data_R[1] << 16) | (data_R[2] << 8) | data_R[3] );
                     break;
                 default:
-                    break;                  
+                    break;        
             }
         }
-        //DeaTimeCheck
-        if(DEADTIMEFLAG){
-            DEADTIMEFLAG = FALSE;
-            for(i = 0; i < 6; i++){
-                if(_deadtimeflg[i]){
-                    deadtimeflg[i] = FALSE;
-                }
-                _deadtimeflg[i] = deadtimeflg[i];
-            }
-            //_deadtimeflg = deadtimeflg;
-        }
-        
 		//LED flashing
         if(LEDFlag){
             LEDFlag =FALSE;
-            LED = ~LED;
-            //while(!ECANSendMessage(0xff, tstMessage,4, ECAN_TX_STD_FRAME));
+            //while(!ECANSendMessage(0xee, tstMessage,4, ECAN_TX_STD_FRAME));
         }
 		if(TimerFlag){
 			TimerFlag = FALSE;
-            //while(!ECANSendMessage(0xff, tstMessage,4, ECAN_TX_STD_FRAME));
             
-            if(TimeOut_Counter > TH_TIMEOUT){
-                for(i =0; i<6; i++){
-                    thCmd[i] = 0;
-                }
+            if(targetspeed.fval < 0){
+                speed.fval = _speed * -1.0;
+            }else{
+                speed.fval = _speed;
             }
             
-            //please write thruster controll adn getting propelloer speed method 
-            //thruster write    
-            /*
-            for(i = 0; i < 6; i++){
-                writeESCtest(thAdr[i],thCmd[i]);
+            if(TimeOut_Counter > TIMEOUT){
+                targetspeed.fval = 0.0;
+                motorfree();
+                speedController.accum = 0;
+            }else{
+                setMotorDuty((int)setMotorVelosity( targetspeed.fval, speed.fval) );
             }
-            */
-            //writeESCtest(thAdr[5],1);
-            //thruster read
+             
+            current.fval = getADC() *  5.0 / 4096 * VOLTAGE2CURRENT;
             
-            for(i = 0; i < 6; i++){
-                //thSpd[i] = readESCtest(thAdr[i]);
-            }
-            //thruster speed sending
-            for(i = 0; i < 4; i++){
-                data_T[i*2] = (thSpd[i] >> 8 );
-                data_T[i*2 + 1] = (thSpd[i] & 0x00ff);
-            }
+            send_Status.data[0] = (speed.ival >> 24) & 0xff;
+            send_Status.data[1] = (speed.ival >> 16) & 0xff;
+            send_Status.data[2] = (speed.ival >> 8) & 0xff;
+            send_Status.data[3] = (speed.ival) & 0xff;
             
-			//while(!ECANSendMessage(idT_TH1, data_T,8, ECAN_TX_STD_FRAME));
-            for(i = 0; i < 2; i++){
-                data_T[i*2] = (thSpd[i+4] >> 8 );
-                data_T[i*2 + 1] = (thSpd[i+4] & 0x00ff);
-            }
-			//while(!ECANSendMessage(idT_TH2, data_T,4, ECAN_TX_STD_FRAME));  
-            //MS5837 reading method
-            data1 = readMs5837ADC(0x48);
-            data2 = readMs5837ADC(0x58);
-            calcValues(data1,data2);
-            temp = data2;
-            pressure = data1;
-            data_T[0] = ((temp >> 24) & 0x0000ff);
-            data_T[1] = ((temp >> 16) & 0x0000ff);
-            data_T[2] = ((temp >> 8) & 0x0000ff);
-            data_T[3] = ((temp) & 0x0000ff);
-            while(!ECANSendMessage(idT_TEMP, data_T,4, ECAN_TX_STD_FRAME));
-            data_T[0] = ((pressure >> 24) & 0x0000ff);
-            data_T[1] = ((pressure >> 16) & 0x0000ff);
-            data_T[2] = ((pressure >> 8) & 0x0000ff);
-            data_T[3] = ((pressure) & 0x0000ff);
-            while(!ECANSendMessage(idT_PRES, data_T,4, ECAN_TX_STD_FRAME));
+            send_Status.data[4] = (current.ival >> 24) & 0xff;
+            send_Status.data[5] = (current.ival >> 16) & 0xff;
+            send_Status.data[6] = (current.ival >> 8) & 0xff;
+            send_Status.data[7] = (current.ival) & 0xff;
             
-            setIna226pointer(0x40, 0x02);
-            battVoltage = getIna226(0x40);
-            setIna226pointer(0x40, 0x04);
-            battCurrent = getIna226(0x40);
-            data_T[0] = ((battVoltage >> 8) & 0x00ff);
-            data_T[1] = (battVoltage & 0x00ff);
-            data_T[2] = ((battCurrent >> 8) & 0x00ff);
-            data_T[3] = (battCurrent & 0x00ff);
-            while(!ECANSendMessage(idT_BATTINFO, data_T,4, ECAN_TX_STD_FRAME));
+            while(!ECANSendMessage(send_Status.ID, send_Status.data,send_Status.len, ECAN_TX_STD_FRAME));
 		}
 	}
+}
+
+float setMotorVelosity(float targetSpeed, float currentSpeed){
+    float s = 0;
+    speedController.error = targetSpeed - currentSpeed;
+    speedController.accum += speedController.error * speedController.dt;
+    
+    s = speedController.k * ( speedController.error + (speedController.I * speedController.accum) );
+    //s = speedController.k * speedController.error;
+    if(speedController.accum > 1000){
+        speedController.accum = 1000;
+    }else if(speedController.accum < -1000){
+        speedController.accum = -1000;
+    }
+    return s;
+}
+void setMotorDuty(int pwm){
+    EN = 1;
+    if((lastDuty & 0x8000) != (pwm & 0x8000) ){
+        SetDCPWM3(0);
+        SetDCPWM4(0);
+        lastDuty = pwm;
+        return;
+    }
+    if(pwm > 0){
+        SetDCPWM3(pwm);
+        SetDCPWM4(0);
+    }else{
+        SetDCPWM3(0);
+        SetDCPWM4(pwm * -1);
+    }
+    lastDuty = pwm;
 }
 //UART_1byte??
 void my_putc(unsigned char a,unsigned char port){
@@ -325,345 +320,76 @@ void my_putc(unsigned char a,unsigned char port){
 		while(!PIR3bits.TX2IF){}
 	}
 }
-char writeESCtest(char adress, int value){
-    char adr; 
-    char data;
-    adr = adress << 1;
-    data = value >> 8;
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){//return(1);
-    }else{
-        if(WriteI2C(adr)){}
-        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(0x00)){//return(2);
-            }
-        }             
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(data)){//return(3);
-            }
-        }         
-        data = value & 0xff;
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(data)){//return(4);
-            }
-        }else{
-            IdleI2C();
-            StopI2C();
-            //return(5);
-        }
-    }
-    IdleI2C();
-    StopI2C();
-    while(SSPCON2bits.PEN){};
-    if(PIR2bits.BCLIF){//return(6);
-    }
-    return(7);
-}
-int readESCtest(char adress){
-    char adr;
-    int speed;
-    unsigned char buff;
-    //set read adr
-    adr = (adress << 1);
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(0x02)){return(2);
-            }
-        }
-    }
-    IdleI2C();
-    StopI2C();
-    while(SSPCON2bits.PEN){};
-    if(PIR2bits.BCLIF){return(6);
-    }
-    //Read
-    adr = (adress << 1) | 0x01;
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            //ReadI2C();
-            //AckI2C();
-            buff = ReadI2C();
-            speed = (buff);
-            AckI2C();
-            buff = ReadI2C();
-            NotAckI2C();
-            speed = (speed << 8) | buff;            
-        }
-    }
-    IdleI2C();
-    StopI2C();
-    while(SSPCON2bits.PEN){};
-    if(PIR2bits.BCLIF){return(6);
-    }    
-    return(speed);
-}
-void resetMS5837(void){
-    char adr = 0xec;
-    char cmd = 0x1e;
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(cmd)){return(2);
-            }
-        }
-    }
-    IdleI2C();
-    if(!SSPCON2bits.ACKSTAT){
-        StopI2C();
-    }
-    
-}
-unsigned int readCalcCoeff(char memadr){
-    char adr = 0xec;
-    char cmd = memadr;
-    unsigned int data;
-    //unsigned char buff;
-    //
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(cmd)){return(2);
-            }
-        }
-    }
-    IdleI2C();
-    if(!SSPCON2bits.ACKSTAT){
-        StopI2C();
-    }
-    //
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr | 0x01)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            data = ReadI2C();
-            AckI2C();
-            data = ( data <<8 ) | ReadI2C();
-            NotAckI2C();
-            IdleI2C();
-            StopI2C();
-            while(SSPCON2bits.PEN){};
-            if(PIR2bits.BCLIF){return(6);
-                }    
-            return(data);
-        }else{
-            return(7);
-        }
-    }    
-}
-unsigned short long readMs5837ADC(char adcconf){    
-    char adr = 0xec;
-    char cmd = adcconf;
-    unsigned short long data=0;
-    //unsigned char buff;
-    //
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(cmd)){return(2);
-            }
-        }
-    }
-    IdleI2C();
-    if(!SSPCON2bits.ACKSTAT){
-        StopI2C();
-    }
-    //
-    IdleI2C();
-    Delay1KTCYx(100);
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(3);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(0x00)){return(4);
-            }
-        }
-    }
-    IdleI2C();
-    if(!SSPCON2bits.ACKSTAT){
-        StopI2C();
-    }
-    //
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(5);
-    }else{
-        if(WriteI2C(adr | 0x01)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            data = ReadI2C();
-            AckI2C();
-            data = ( data <<8 ) | ReadI2C();
-            AckI2C();
-            data = ( data <<8 ) | ReadI2C();
-            //ReadI2C();
-            //data = ( data <<8 );
-            NotAckI2C();
-            //AckI2C();
-            IdleI2C();
-            StopI2C();
-            while(SSPCON2bits.PEN){};
-            if(PIR2bits.BCLIF){return(6);
-                }    
-            return(data);
-        }else{
-            return(7);
-        }
-    }        
-}
-void calcValues(unsigned short long D1,unsigned short long D2){
-    //first order
-    dT = D2 - promCoeff[5] * 256;
-    temp = 2000 + dT  * promCoeff[6] / 8388608;
-    off = promCoeff[2] * 65536+ (promCoeff[4] * dT) / 128;
-    sens = promCoeff[1] * 32768 + (promCoeff[3] * dT ) / 256;
-    pressure = (D1 * sens / 2097152 - off) / 8192;
-    //second order is not implemented 
-}
 void init(void){
 	//0:out 1:in
-	TRISA = 0x00;
-	TRISB = 0x08;
+	TRISA = 0x01;
+	TRISB = 0x10;
 	TRISC = 0x00;
 	ANCON0 = 0x00;
 	ANCON1 = 0x00;
     
 	ECANInitialize();
+    
+    //Timer and interrupt 
 	OpenTimer0(TIMER_INT_ON & T0_8BIT & T0_SOURCE_INT & T0_PS_1_32);//20MHZ/4/256/256 = 76.29Hz;
 	INTCONbits.GIE = 1;
 	INTCONbits.PEIE = 1;
-	//INTCONbits.RBIE = 1;
-	//IOCB = 0x90;//RB7.RB4????????
-	//SetDCPWM2(dutyCycle);
-	//OpenPWM2(PWMPERIOD,1);
-	//??????
-    //thRev();
-    OpenI2C(MASTER,SLEW_ON);
-    SSPCON1bits.SSPEN = 1;
-    SSPADD = 255;
+	INTCONbits.RBIE = 1;
+	IOCB = 0x10;//RB4
+   
+    //PWM
+    T2CON = 0b00000011;
+    SetDCPWM3(0x0000);
+    SetDCPWM4(0x0000);
+	OpenPWM3(0xff,1);
+    OpenPWM4(0xff,1);
+    
+    //I2C
+    //OpenI2C(MASTER,SLEW_ON);
+    //SSPCON1bits.SSPEN = 1;
+    //SSPADD = 255;
+    
     //ADC initialize
-    //OpenADC(ADC_FOSC_32 & ADC_RIGHT_JUST & ADC_8_TAD,ADC_CH0 & ADC_INT_OFF , 15);
+    OpenADC(ADC_FOSC_32 & ADC_RIGHT_JUST & ADC_20_TAD,ADC_CH0 & ADC_INT_OFF ,0);
 }
-unsigned int getADC(void){
+int getADC(void){
     ConvertADC();
     while(BusyADC()){}
     return ReadADC();
 }
-
-void setIna226pointer(unsigned char adr_, unsigned char pointer_){
-    unsigned char adr = (adr_) << 1;
-    unsigned char pointer = pointer_;
-    //
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            if(WriteI2C(pointer)){return(2);
-            }
-        }
-    }
-    IdleI2C();
-    if(!SSPCON2bits.ACKSTAT){
-        StopI2C();
+void motorupdate(int duty){
+    if(duty >0){
+        SetDCPWM3(0x7fff & duty);
+    }else if(duty != 0){
+        SetDCPWM4(0x7fff & duty);
     }
 }
-signed int  getIna226(unsigned char adr_){
-    unsigned char adr = adr_;
-    signed int data;
-    adr = ((adr <<1) | 0x01);
-    //
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            data = ReadI2C();
-            AckI2C();
-            data = ( data <<8 ) | ReadI2C();
-            NotAckI2C();
-            IdleI2C();
-            StopI2C();
-            while(SSPCON2bits.PEN){};
-            if(PIR2bits.BCLIF){return(6);
-                }    
-            return(data);
-        }
+void motorfree(void){
+    SetDCPWM3(0x00);
+    SetDCPWM4(0x00);
+    EN = 0;
+    
+}
+void controllupdate(char mode, int power, float target_speed, float target_torque){
+    int duty;
+    switch(mode){
+        case 0:
+            duty = power;
+            break;
+        case 1:
+            duty = (target_speed - speed.fval) * 1;
+            break;
+        case 2:
+            break;
+        default:
+            break;
     }
+    motorupdate(duty);
 }
 
-void setIna226Value(unsigned char adr_,unsigned char pointer_,unsigned int data){
-    unsigned char adr = adr_;
-    adr = ((adr <<1));
-    //
-    IdleI2C();
-    StartI2C();
-    while(SSPCON2bits.SEN){}
-    if(PIR2bits.BCLIF){return(1);
-    }else{
-        if(WriteI2C(adr)){}        
-        IdleI2C();
-        if(!SSPCON2bits.ACKSTAT){
-            WriteI2C(pointer_);
-            if(!SSPCON2bits.ACKSTAT){
-                WriteI2C((data >> 8));
-                if(!SSPCON2bits.ACKSTAT){
-                    WriteI2C((data &0xff));
-                    if(!SSPCON2bits.ACKSTAT){
-                        IdleI2C();
-                        StopI2C();
-                        while(SSPCON2bits.PEN){};
-                        if(PIR2bits.BCLIF){return(6);
-                        }    
-                    }
-                }
-            }
-        }
+void Int2Bytes(int input, BYTE* target, BYTE len){
+    int i = 0;
+    for(i; i < len; i++){
+        target[i] = input << (8 * i);
     }
 }
