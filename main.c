@@ -59,15 +59,17 @@
 
 #define STAGE_DEPLOY PORTCbits.RB0
 #define STAGE_PULL_IN PORTCbits.RB1
-#define CABLE_DEPLOY PORTCbits.RB4
-#define CABLE_PULL_IN PORTCbits.RB5
+#define CABLE_DEPLOY PORTCbits.RB6
+#define CABLE_PULL_IN PORTCbits.RB7
 
+#define M1_EN PORTCbits.RC0
 #define M1_PWM1 PORTCbits.RC2
-#define M1_PWM2 PORTCbits.RC3
-#define M2_PWM1 PORTCbits.RC4
-#define M3_PWM2 PORTCbits.RC5
-#define M1_Duty PORTCbits.RC6
-#define M2_Duty PORTCbits.RC7
+#define M1_PWM2 PORTCbits.RC6
+
+#define M2_EN PORTCbits.RC1
+#define M2_PWM1 PORTCbits.RC7
+#define M2_PWM2 PORTBbits.RB5
+
 #define MCHP_C18
 #define NODE1
 
@@ -145,12 +147,14 @@ typedef struct {
     float dt;
 } controller;
 
-controller speedController;
+controller m1_Controller;
+controller m2_Controller;
 
 long sc = 0;
 int PWM_power = 0;
 
-int lastDuty = 0;
+int lastDuty_m1 = 0;
+int lastDuty_m2 = 0;
 int dir = 1;
 //????????==============================================================
 #pragma code compatible_vvector=0x08
@@ -195,10 +199,15 @@ void isr(void){
 void main()
 {	
     speed.fval = 0.0;
-    speedController.k = 15;
-    speedController.I = 18;
-    speedController.dt = 1.0 / intCycle;
-    speedController.accum = 0;
+    m1_Controller.k = 15;
+    m1_Controller.I = 18;
+    m1_Controller.dt = 1.0 / intCycle;
+    m1_Controller.accum = 0;
+    
+    m2_Controller.k = 15;
+    m2_Controller.I = 18;
+    m2_Controller.dt = 1.0 / intCycle;
+    m2_Controller.accum = 0;
     targetspeed.fval = 0;
     
     set_tension.ID = ID_SET_TENSION_ROLLER_COMMAND;
@@ -275,9 +284,11 @@ void main()
             if(TimeOut_Counter > TIMEOUT){
                 targetspeed.fval = 0.0;
                 motorfree();
-                speedController.accum = 0;
+                m1_Controller.accum = 0;
+                m2_Controller.accum = 0;
             }else{
-                setMotorDuty((int)setMotorVelosity( targetspeed.fval, speed.fval) );
+                //setMotorDuty((int)setMotorVelosity( targetspeed.fval, speed.fval) );
+                setMotorDuty();
             }
              
             current.fval = getADC() *  5.0 / 4096 * VOLTAGE2CURRENT;
@@ -299,21 +310,22 @@ void main()
 
 float setMotorVelosity(float targetSpeed, float currentSpeed){
     float s = 0;
-    speedController.error = targetSpeed - currentSpeed;
-    speedController.accum += speedController.error * speedController.dt;
+    m1_Controller.error = targetSpeed - currentSpeed;
+    m1_Controller.accum += m1_Controller.error * m1_Controller.dt;
     
-    s = speedController.k * ( speedController.error + (speedController.I * speedController.accum) );
+    s = m1_Controller.k * ( m1_Controller.error + (m1_Controller.I * m1_Controller.accum) );
     //s = speedController.k * speedController.error;
-    if(speedController.accum > 1000){
-        speedController.accum = 1000;
-    }else if(speedController.accum < -1000){
-        speedController.accum = -1000;
+    if(m1_Controller.accum > 1000){
+        m1_Controller.accum = 1000;
+    }else if(m1_Controller.accum < -1000){
+        m1_Controller.accum = -1000;
     }
     return s;
 }
-void setMotorDuty(int pwm){
-    EN = 1;
-    if((lastDuty & 0x8000) != (pwm & 0x8000) ){
+void setMotorDuty(int pwm1, int pwm2){
+    M1_EN = 1;
+    M2_EN = 1;
+    if((lastDuty_M1 & 0x8000) != (pwm & 0x8000) ){
         SetDCPWM3(0);
         SetDCPWM4(0);
         lastDuty = pwm;
