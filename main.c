@@ -1,15 +1,24 @@
 /*------------------------------------
  * Pin configuration
- * RA0: MotorCurrent
+ * PORTA: 0000001 0x03
+ * RA0: MotorCurrent_L
+ * RA1: MotorCurrent_R
  * 
- * RB0: Encoder A
- * RB1: Encoder B
+ * PORTB: 00110011 0x33
+ * RB0: toggle swith input :deploy
+ * RB1: toggle swith input :pull in 
  * RB2: CANTX
  * RB3: CANRX
- *  
- * RC5: MotorDriver EN
- * RC6: pwm3, MotorDriver PWM1
- * RC7: pwm4, MotorDriver PWM2
+ * RB4: toggle swith input :deploy cable
+ * RB5: toggle swith input :pull in cable
+ * 
+ * PORTC: 00000000 0x00
+ * RC2: MotorDriver_L PWM1
+ * RC3: MotorDriver_L PWM2
+ * RC4: MotorDriver_R PWM1
+ * RC5: MotorDriver_R PWM2
+ * RC6: pwm3, MotorDriver_L EN
+ * RC7: pwm4, MotorDriver_R EN
  * 
  * CAN message
  * Receive
@@ -47,11 +56,18 @@
 
 #define TMR0IF INTCONbits.TMR0IF
 #define RBIF INTCONbits.RBIF
-#define ENC_A PORTBbits.RB4
-#define ENC_B PORTBbits.RB5
-#define EN PORTCbits.RC5
-#define PWM1 PORTCbits.RC6
-#define PWM2 PORTCbits.RC7
+
+#define STAGE_DEPLOY PORTCbits.RB0
+#define STAGE_PULL_IN PORTCbits.RB1
+#define CABLE_DEPLOY PORTCbits.RB4
+#define CABLE_PULL_IN PORTCbits.RB5
+
+#define M1_PWM1 PORTCbits.RC2
+#define M1_PWM2 PORTCbits.RC3
+#define M2_PWM1 PORTCbits.RC4
+#define M3_PWM2 PORTCbits.RC5
+#define M1_Duty PORTCbits.RC6
+#define M2_Duty PORTCbits.RC7
 #define MCHP_C18
 #define NODE1
 
@@ -63,7 +79,7 @@ int getADC(void);
 void motorupdate(int duty);
 void motorfree(void);
 void controllupdate(char mode, int power, float target_speed, float target_torque);
-void setMotorDuty(int pwm);
+void setMotorDuty(int ch,int pwm);
 float setMotorVelosity(float targetSpeed, float currentSpeed);
 void Int2Bytes(int input, BYTE* target, BYTE len);
 //===================================================================
@@ -166,12 +182,14 @@ void isr(void){
 			LEDFlag = TRUE;
 		}
 	}
+    /*
     if(RBIF){
         RBIF = 0;
         if(ENC_A){
             speedCounter +=1;
         } 
     }
+     */
 }
 //?????=========================================================================
 void main()

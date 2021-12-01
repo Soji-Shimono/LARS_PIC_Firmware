@@ -38,11 +38,11 @@
         <targetPluginBoard></targetPluginBoard>
         <platformTool>PICkit3PlatformTool</platformTool>
         <languageToolchain>C18</languageToolchain>
-        <languageToolchainVersion>3.46</languageToolchainVersion>
+        <languageToolchainVersion>3.47</languageToolchainVersion>
         <platform>3</platform>
       </toolsSet>
       <packs>
-        <pack name="PIC18F-K_DFP" vendor="Microchip" version="1.0.48"/>
+        <pack name="PIC18F-K_DFP" vendor="Microchip" version="1.2.72"/>
       </packs>
       <compileType>
         <linkerTool>

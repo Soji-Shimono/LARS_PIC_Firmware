@@ -70,6 +70,7 @@ OBJECTFILES=${OBJECTDIR}/_ext/1472/ECAN.o ${OBJECTDIR}/_ext/1472/main.o ${OBJECT
 SOURCEFILES=../ECAN.c ../main.c ../thDrive.c
 
 
+
 CFLAGS=
 ASFLAGS=
 LDLIBSOPTIONS=
@@ -91,7 +92,7 @@ endif
 
 MP_PROCESSOR_OPTION=18F25K80
 MP_PROCESSOR_OPTION_LD=18f25k80
-MP_LINKER_DEBUG_OPTION=
+MP_LINKER_DEBUG_OPTION=  -u_DEBUGSTACK
 # ------------------------------------------------------------------------------------
 # Rules for buildStep: assemble
 ifeq ($(TYPE_IMAGE), DEBUG_RUN)
