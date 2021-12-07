@@ -10,15 +10,18 @@
  * RB2: CANTX
  * RB3: CANRX
  * RB4: toggle swith input :deploy cable
- * RB5: toggle swith input :pull in cable
+ * RB6: toggle swith input :pull in cable
  * 
  * PORTC: 00000000 0x00
+ * RC0: MotorDriver_L EN
  * RC2: MotorDriver_L PWM1
- * RC3: MotorDriver_L PWM2
- * RC4: MotorDriver_R PWM1
- * RC5: MotorDriver_R PWM2
- * RC6: pwm3, MotorDriver_L EN
- * RC7: pwm4, MotorDriver_R EN
+ * RC6: MotorDriver_L PWM2
+ * 
+ * RC1: MotorDriver_R EN
+ * RC7: MotorDriver_R PWM1
+ * RB5: MotorDriver_R PWM2
+ * 
+ * 
  * 
  * CAN message
  * Receive
@@ -31,6 +34,7 @@
  * 0x7a 8byte motor state 0-3: float velosity, 4-7: float torque
  *   
  * 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
+ * https://www.pololu.com/product/2997
 //------------------------------------*/
 
 #include <p18lf25k80.h>
@@ -77,11 +81,11 @@
 void isr(void);
 void my_putc(unsigned char a,unsigned char port);
 void init(void);
-int getADC(void);
+int getADC(inc ch);
 void motorupdate(int duty);
 void motorfree(void);
 void controllupdate(char mode, int power, float target_speed, float target_torque);
-void setMotorDuty(int ch,int pwm);
+void setMotorDuty(int pwm1,int pwm2);
 float setMotorVelosity(float targetSpeed, float currentSpeed);
 void Int2Bytes(int input, BYTE* target, BYTE len);
 //===================================================================
@@ -125,7 +129,8 @@ union IntAndFloat{
 union IntAndFloat speed;
 union IntAndFloat targetspeed;
 union IntAndFloat targetspeed_tension;
-union IntAndFloat current;
+union IntAndFloat current_m1;
+union IntAndFloat current_m2;
 
 
 
@@ -291,24 +296,25 @@ void main()
                 setMotorDuty();
             }
              
-            current.fval = getADC() *  5.0 / 4096 * VOLTAGE2CURRENT;
+            current_m1.fval = getADC(1) *  5.0 / 4096 * VOLTAGE2CURRENT;
+            current_m2.fval = getADC(2) *  5.0 / 4096 * VOLTAGE2CURRENT;
             
-            send_Status.data[0] = (speed.ival >> 24) & 0xff;
-            send_Status.data[1] = (speed.ival >> 16) & 0xff;
-            send_Status.data[2] = (speed.ival >> 8) & 0xff;
-            send_Status.data[3] = (speed.ival) & 0xff;
+            send_Status.data[0] = (current_m1.ival >> 24) & 0xff;
+            send_Status.data[1] = (current_m1.ival >> 16) & 0xff;
+            send_Status.data[2] = (current_m1.ival >> 8) & 0xff;
+            send_Status.data[3] = (current_m1.ival) & 0xff;
             
-            send_Status.data[4] = (current.ival >> 24) & 0xff;
-            send_Status.data[5] = (current.ival >> 16) & 0xff;
-            send_Status.data[6] = (current.ival >> 8) & 0xff;
-            send_Status.data[7] = (current.ival) & 0xff;
+            send_Status.data[4] = (current_m2.ival >> 24) & 0xff;
+            send_Status.data[5] = (current_m2.ival >> 16) & 0xff;
+            send_Status.data[6] = (current_m2.ival >> 8) & 0xff;
+            send_Status.data[7] = (current_m2.ival) & 0xff;
             
             while(!ECANSendMessage(send_Status.ID, send_Status.data,send_Status.len, ECAN_TX_STD_FRAME));
 		}
 	}
 }
 
-float setMotorVelosity(float targetSpeed, float currentSpeed){
+float setMotorVelosity_m1(float targetSpeed, float currentSpeed){
     float s = 0;
     m1_Controller.error = targetSpeed - currentSpeed;
     m1_Controller.accum += m1_Controller.error * m1_Controller.dt;
@@ -322,23 +328,52 @@ float setMotorVelosity(float targetSpeed, float currentSpeed){
     }
     return s;
 }
+float setMotorVelosity_m2(float targetSpeed, float currentSpeed){
+    float s = 0;
+    m2_Controller.error = targetSpeed - currentSpeed;
+    m2_Controller.accum += m2_Controller.error * m2_Controller.dt;
+    
+    s = m2_Controller.k * ( m2_Controller.error + (m2_Controller.I * m2_Controller.accum) );
+    //s = speedController.k * speedController.error;
+    if(m2_Controller.accum > 1000){
+        m2_Controller.accum = 1000;
+    }else if(m2_Controller.accum < -1000){
+        m2_Controller.accum = -1000;
+    }
+    return s;
+}
 void setMotorDuty(int pwm1, int pwm2){
     M1_EN = 1;
-    M2_EN = 1;
-    if((lastDuty_M1 & 0x8000) != (pwm & 0x8000) ){
+    if((lastDuty_m1 & 0x8000) != (pwm1 & 0x8000) ){
         SetDCPWM3(0);
         SetDCPWM4(0);
-        lastDuty = pwm;
+        lastDuty_m1 = pwm1;
         return;
     }
-    if(pwm > 0){
-        SetDCPWM3(pwm);
-        SetDCPWM4(0);
-    }else{
+    if(pwm1 > 0){
+        SetDCPWM2(pwm1);
         SetDCPWM3(0);
-        SetDCPWM4(pwm * -1);
+    }else{
+        SetDCPWM2(0);
+        SetDCPWM3(pwm1 * -1);
     }
-    lastDuty = pwm;
+    lastDuty_m1 = pwm1;
+    
+    M2_EN = 1;
+    if((lastDuty_m2 & 0x8000) != (pwm2 & 0x8000) ){
+        SetDCPWM4(0);
+        SetDCPWM5(0);
+        lastDuty_m2 = pwm2;
+        return;
+    }
+    if(pwm2 > 0){
+        SetDCPWM4(pwm1);
+        SetDCPWM5(0);
+    }else{
+        SetDCPWM4(0);
+        SetDCPWM5(pwm1 * -1);
+    }
+    lastDuty_m2 = pwm2;
 }
 //UART_1byte??
 void my_putc(unsigned char a,unsigned char port){
@@ -395,9 +430,12 @@ void motorupdate(int duty){
     }
 }
 void motorfree(void){
+    SetDCPWM2(0x00);
     SetDCPWM3(0x00);
     SetDCPWM4(0x00);
-    EN = 0;
+    SetDCPWM5(0x00);
+    M1_EN = 0;
+    M2_EN = 0;
     
 }
 void controllupdate(char mode, int power, float target_speed, float target_torque){
