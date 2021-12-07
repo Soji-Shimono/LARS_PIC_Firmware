@@ -33,7 +33,7 @@
  * 0x79 set tension roller command  0: mode-direct, speed, torque, free. 1-4: singed int target value- pwm duty, velosity, torque
  * 0x7a 8byte motor state 0-3: float velosity, 4-7: float torque
  *   
- * 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
+ * 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
  * https://www.pololu.com/product/2997
 //------------------------------------*/
 
