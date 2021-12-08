@@ -1,7 +1,1 @@
-Warning[2054] C:\Users\Soji\Dropbox\PrivateProject\vodyanoy_next\Motor_Pressure_Controll_20191111\main.c 174 : suspicious pointer conversion
-Warning[2052] C:\Users\Soji\Dropbox\PrivateProject\vodyanoy_next\Motor_Pressure_Controll_20191111\main.c 424 : unexpected return value
-Warning[2052] C:\Users\Soji\Dropbox\PrivateProject\vodyanoy_next\Motor_Pressure_Controll_20191111\main.c 429 : unexpected return value
-Warning[2052] C:\Users\Soji\Dropbox\PrivateProject\vodyanoy_next\Motor_Pressure_Controll_20191111\main.c 600 : unexpected return value
-Warning[2052] C:\Users\Soji\Dropbox\PrivateProject\vodyanoy_next\Motor_Pressure_Controll_20191111\main.c 605 : unexpected return value
-Warning[2052] C:\Users\Soji\Dropbox\PrivateProject\vodyanoy_next\Motor_Pressure_Controll_20191111\main.c 648 : unexpected return value
-Warning[2052] C:\Users\Soji\Dropbox\PrivateProject\vodyanoy_next\Motor_Pressure_Controll_20191111\main.c 662 : unexpected return value
+Warning[2054] C:\Users\Infra\Desktop\LARS_PIC_Firmware\main.c 230 : suspicious pointer conversion

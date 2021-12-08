@@ -25,13 +25,11 @@
  * 
  * CAN message
  * Receive
- * 0x70 5byte set target 0: mode-direct, speed, torque, free. 1-4: singed int target value- pwm duty, velosity, torque 
- * 0x71 4byte set torque-current coeff 0-3: float
+ * 0x90 2byte set motor pwm duty 0: pwm_H, 1: pwm_L
  * 
  * Send
- * 0x78 1byte Heart beat
- * 0x79 set tension roller command  0: mode-direct, speed, torque, free. 1-4: singed int target value- pwm duty, velosity, torque
- * 0x7a 8byte motor state 0-3: float velosity, 4-7: float torque
+ * 0x98 1byte Heart beat
+ * 0x99 4byte motors state 0-1: motor1 current, 2-3: motor2 current 
  *   
  * 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
  * https://www.pololu.com/product/2997
@@ -61,10 +59,13 @@
 #define TMR0IF INTCONbits.TMR0IF
 #define RBIF INTCONbits.RBIF
 
-#define STAGE_DEPLOY PORTCbits.RB0
-#define STAGE_PULL_IN PORTCbits.RB1
-#define CABLE_DEPLOY PORTCbits.RB6
-#define CABLE_PULL_IN PORTCbits.RB7
+#define STAGE_DEPLOY PORTBbits.RB0
+#define STAGE_PULL_IN PORTBbits.RB1
+#define CABLE_DEPLOY PORTBbits.RB6
+#define CABLE_PULL_IN PORTBbits.RB7
+
+#define DEPLOY_LIMIT PORTBbits.RB4
+#define PULL_IN_LIMIT PORTBbits.RB5
 
 #define M1_EN PORTCbits.RC0
 #define M1_PWM1 PORTCbits.RC2
@@ -74,6 +75,9 @@
 #define M2_PWM1 PORTCbits.RC7
 #define M2_PWM2 PORTBbits.RB5
 
+#define DUTY_DEPLOY 0x7fff
+#define DUTY_PULL 0xffff
+
 #define MCHP_C18
 #define NODE1
 
@@ -81,7 +85,7 @@
 void isr(void);
 void my_putc(unsigned char a,unsigned char port);
 void init(void);
-int getADC(inc ch);
+int getADC(int ch);
 void motorupdate(int duty);
 void motorfree(void);
 void controllupdate(char mode, int power, float target_speed, float target_torque);
@@ -226,48 +230,9 @@ void main()
 		if(ECANReceiveMessage(&id, data_R, &datalen_R, &flags)){
             //while(!ECANSendMessage(id, data_T,2, ECAN_TX_STD_FRAME));
 			switch(id){
-                case 0x70:
+                case 0x90:
                     TimeOut_Counter = 0;
-                    switch(data_R[0]){
-                        case 0://direct
-                            control_mode = 0;
-                            pwm_duty = ((data_R[1] << 8 ) | data_R[2]);
-                            break;
-                        case 1://speed controll
-                            control_mode = 1;
-                            targetspeed.ival = data_R[1];
-                            targetspeed.ival = targetspeed.ival << 8 | data_R[2];
-                            targetspeed.ival = targetspeed.ival << 8 | data_R[3];
-                            targetspeed.ival = targetspeed.ival << 8 | data_R[4];
-                            //tension roller command sending
-                            if(targetspeed.fval > 0){
-                                targetspeed_tension.fval = targetspeed.fval * reelRadius / rollerRadius;
-                            }else{
-                                targetspeed_tension.fval = targetspeed.fval * reelRadius_ / rollerRadius;
-                            }
-                            
-                            //targetspeed_tension.fval = targetspeed.fval * reelRadius / rollerRadius;
-                            //Int2Bytes(targetspeed_tension.ival, set_tension.data, set_tension.len);
-                            set_tension.data[0] = 1;
-                            set_tension.data[1] = (targetspeed_tension.ival >> 24) & 0xff;
-                            set_tension.data[2] = (targetspeed_tension.ival >> 16) & 0xff;
-                            set_tension.data[3] = (targetspeed_tension.ival >> 8) & 0xff;
-                            set_tension.data[4] = (targetspeed_tension.ival) & 0xff;
-                            
-                            while(!ECANSendMessage(set_tension.ID, set_tension.data, set_tension.len, ECAN_TX_STD_FRAME));
-                            
-                            break;
-                        case 2:
-                            control_mode = 2;
-                            target_torque = ((data_R[1] << 24 ) | (data_R[2] << 16) | (data_R[3] << 8) | data_R[4] );
-                            break;
-                        default:
-                            break;
-                    }
-                break;
-                case 0x71:
-                    torque2current = ((data_R[0] << 24 ) | (data_R[1] << 16) | (data_R[2] << 8) | data_R[3] );
-                    break;
+                            pwm_duty = ((data_R[0] << 8 ) | data_R[1]);
                 default:
                     break;        
             }
@@ -279,21 +244,33 @@ void main()
         }
 		if(TimerFlag){
 			TimerFlag = FALSE;
-            
-            if(targetspeed.fval < 0){
-                speed.fval = _speed * -1.0;
+            //State control
+            if(STAGE_DEPLOY){
+                if(DEPLOY_LIMIT){
+                    setMotorDuty(DUTY_DEPLOY, DUTY_DEPLOY);
+                }else{
+                    setMotorDuty(0, 0);
+                }
+            }else if(STAGE_PULL_IN){
+                if(PULL_IN_LIMIT){
+                    setMotorDuty(DUTY_PULL, DUTY_PULL);
+                }else{
+                    setMotorDuty(0, 0);
+                }
             }else{
-                speed.fval = _speed;
+                if(TimeOut_Counter > TIMEOUT){
+                    pwm_duty = 0.0;
+                    motorfree();
+                }
+                setMotorDuty(pwm_duty, pwm_duty);
             }
-            
-            if(TimeOut_Counter > TIMEOUT){
-                targetspeed.fval = 0.0;
-                motorfree();
-                m1_Controller.accum = 0;
-                m2_Controller.accum = 0;
-            }else{
-                //setMotorDuty((int)setMotorVelosity( targetspeed.fval, speed.fval) );
-                setMotorDuty();
+            //Cable reel control
+            if(CABLE_DEPLOY){
+                //Cable deploy queue
+                //while(!ECANSendMessage(send_Status.ID, send_Status.data,send_Status.len, ECAN_TX_STD_FRAME));
+            }else if(CABLE_PULL_IN){
+                //Cable pull in queue
+                //while(!ECANSendMessage(send_Status.ID, send_Status.data,send_Status.len, ECAN_TX_STD_FRAME));
             }
              
             current_m1.fval = getADC(1) *  5.0 / 4096 * VOLTAGE2CURRENT;
@@ -417,7 +394,12 @@ void init(void){
     //ADC initialize
     OpenADC(ADC_FOSC_32 & ADC_RIGHT_JUST & ADC_20_TAD,ADC_CH0 & ADC_INT_OFF ,0);
 }
-int getADC(void){
+int getADC(int ch){
+    if(ch = 1){
+        OpenADC(ADC_FOSC_32 & ADC_RIGHT_JUST & ADC_20_TAD,ADC_CH0 & ADC_INT_OFF ,0);
+    }else if(ch = 2){
+        OpenADC(ADC_FOSC_32 & ADC_RIGHT_JUST & ADC_20_TAD,ADC_CH1 & ADC_INT_OFF ,0);
+    }
     ConvertADC();
     while(BusyADC()){}
     return ReadADC();
